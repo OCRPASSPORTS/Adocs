@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>مستخلص بيانات الجوازات | Videcom & Amadeus</title>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0f2f5; color: #1c1e21; text-align: center; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,0.1); }
+        h1 { color: #1a73e8; margin-bottom: 10px; }
+        .options-box { background: #f8f9fa; border: 1px solid #dee2e6; padding: 20px; border-radius: 10px; margin-bottom: 20px; text-align: right; }
+        .options-box label { font-weight: bold; cursor: pointer; display: block; margin-bottom: 8px; }
+        input[type="password"] { width: 95%; padding: 12px; margin-top: 10px; border: 1px solid #ced4da; border-radius: 6px; }
+        input[type="file"] { margin: 20px 0; width: 100%; }
+        button#extractBtn { background-color: #28a745; color: white; border: none; padding: 15px; font-size: 18px; border-radius: 8px; cursor: pointer; width: 100%; font-weight: bold; }
+        button#extractBtn:hover { background-color: #218838; }
+        button#extractBtn:disabled { background-color: #6c757d; }
+        #resultsContainer { margin-top: 25px; text-align: left; direction: ltr; }
+        .passport-result { background: #fff; border-left: 5px solid #1a73e8; padding: 15px; margin-bottom: 15px; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); position: relative; }
+        .file-name { font-weight: bold; color: #5f6368; margin-bottom: 5px; font-family: sans-serif; font-size: 0.9em; }
+        .result-text { background: #f1f3f4; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 1.1em; color: #202124; white-space: pre-wrap; word-break: break-all; }
+        .error-text { color: #d32f2f; font-weight: bold; }
+        .copy-btn { position: absolute; right: 10px; top: 40px; background: #1a73e8; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8em; }
+        #loading { display: none; color: #e67e22; font-weight: bold; margin: 15px 0; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>نظام إدخال بيانات الجوازات ✈️</h1>
+    <p style="color: #5f6368;">استخلاص سريع لمنظومات Videcom و Amadeus</p>
+    
+    <div class="options-box">
+        <label><input type="radio" name="extractMethod" value="videcom" checked onchange="toggleApiInput()"> استخراج لمنظومة Videcom (AI)</label>
+        <label><input type="radio" name="extractMethod" value="amadeus" onchange="toggleApiInput()"> استخراج لمنظومة Amadeus (AI)</label>
+        <label><input type="radio" name="extractMethod" value="ocr" onchange="toggleApiInput()"> استخراج الشفرة MRZ فقط (محلي - بدون إنترنت)</label>
+        
+        <div id="apiKeyContainer">
+            <input type="password" id="geminiApiKey" placeholder="أدخل مفتاح Gemini API هنا...">
+        </div>
+    </div>
+
+    <input type="file" id="passportImages" accept="image/*" multiple>
+    <button id="extractBtn" onclick="processAllImages()">بدء معالجة الصور 🔍</button>
+
+    <div id="loading">جاري معالجة الصور... يرجى الانتظار ⏳</div>
+    <div id="resultsContainer"></div>
+</div>
+
+<script>
+    function toggleApiInput() {
+        const method = document.querySelector('input[name="extractMethod"]:checked').value;
+        document.getElementById('apiKeyContainer').style.display = method === 'ocr' ? 'none' : 'block';
+    }
+
+    async function processAllImages() {
+        const fileInput = document.getElementById('passportImages');
+        const resultsContainer = document.getElementById('resultsContainer');
+        const extractBtn = document.getElementById('extractBtn');
+        const loading = document.getElementById('loading');
+        const method = document.querySelector('input[name="extractMethod"]:checked').value;
+        const apiKey = document.getElementById('geminiApiKey').value.trim();
+
+        if (fileInput.files.length === 0) { alert("الرجاء اختيار صورة جواز واحد على الأقل."); return; }
+        if (method !== 'ocr' && !apiKey) { alert("الرجاء إدخال مفتاح API."); return; }
+
+        extractBtn.disabled = true;
+        loading.style.display = "block";
+        resultsContainer.innerHTML = "";
+
+        for (let i = 0; i < fileInput.files.length; i++) {
+            const file = fileInput.files[i];
+            const resultDiv = document.createElement('div');
+            resultDiv.className = 'passport-result';
+            resultDiv.innerHTML = `<div class="file-name">📄 ${file.name}</div><div class="result-text" id="res-${i}">جاري المعالجة...</div>`;
+            resultsContainer.appendChild(resultDiv);
+
+            try {
+                let output = "";
+                if (method === 'ocr') {
+                    output = await processWithOCR(file);
+                } else {
+                    output = await processWithAI(file, apiKey, method);
+                }
+                document.getElementById(`res-${i}`).innerText = output;
+                document.getElementById(`res-${i}`).classList.remove("error-text");
+                
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'copy-btn';
+                copyBtn.innerText = 'نسخ النص 📋';
+                copyBtn.onclick = () => {
+                    navigator.clipboard.writeText(output);
+                    copyBtn.innerText = 'تم النسخ! ✅';
+                    setTimeout(() => copyBtn.innerText = 'نسخ النص 📋', 2000);
+                };
+                resultDiv.appendChild(copyBtn);
+
+            } catch (err) {
+                const errorBox = document.getElementById(`res-${i}`);
+                errorBox.innerText = "❌ فشل: " + err.message;
