@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>مستخلص بيانات الجوازات | Videcom & Amadeus</title>
+    <title>نظام الجوازات | Videcom & Amadeus</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0f2f5; color: #1c1e21; text-align: center; padding: 20px; }
@@ -12,16 +12,17 @@
         .options-box { background: #f8f9fa; border: 1px solid #dee2e6; padding: 20px; border-radius: 10px; margin-bottom: 20px; text-align: right; }
         .options-box label { font-weight: bold; cursor: pointer; display: block; margin-bottom: 8px; }
         input[type="password"] { width: 95%; padding: 12px; margin-top: 10px; border: 1px solid #ced4da; border-radius: 6px; }
-        input[type="file"] { margin: 20px 0; width: 100%; }
-        button#extractBtn { background-color: #28a745; color: white; border: none; padding: 15px; font-size: 18px; border-radius: 8px; cursor: pointer; width: 100%; font-weight: bold; }
+        input[type="file"] { margin: 20px 0; width: 100%; border: 1px dashed #ccc; padding: 15px; background: #fafafa; }
+        button#extractBtn { background-color: #28a745; color: white; border: none; padding: 15px; font-size: 18px; border-radius: 8px; cursor: pointer; width: 100%; font-weight: bold; transition: 0.2s; }
         button#extractBtn:hover { background-color: #218838; }
-        button#extractBtn:disabled { background-color: #6c757d; }
+        button#extractBtn:disabled { background-color: #6c757d; cursor: wait; }
         #resultsContainer { margin-top: 25px; text-align: left; direction: ltr; }
         .passport-result { background: #fff; border-left: 5px solid #1a73e8; padding: 15px; margin-bottom: 15px; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); position: relative; }
         .file-name { font-weight: bold; color: #5f6368; margin-bottom: 5px; font-family: sans-serif; font-size: 0.9em; }
-        .result-text { background: #f1f3f4; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 1.1em; color: #202124; white-space: pre-wrap; word-break: break-all; }
+        .result-text { background: #f1f3f4; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 1.1em; color: #202124; white-space: pre-wrap; word-break: break-all; min-height: 25px; }
         .error-text { color: #d32f2f; font-weight: bold; }
-        .copy-btn { position: absolute; right: 10px; top: 40px; background: #1a73e8; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8em; }
+        .copy-btn { position: absolute; right: 10px; top: 35px; background: #1a73e8; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85em; font-weight: bold; }
+        .copy-btn:hover { background: #1557b0; }
         #loading { display: none; color: #e67e22; font-weight: bold; margin: 15px 0; }
     </style>
 </head>
@@ -34,10 +35,11 @@
     <div class="options-box">
         <label><input type="radio" name="extractMethod" value="videcom" checked onchange="toggleApiInput()"> استخراج لمنظومة Videcom (AI)</label>
         <label><input type="radio" name="extractMethod" value="amadeus" onchange="toggleApiInput()"> استخراج لمنظومة Amadeus (AI)</label>
-        <label><input type="radio" name="extractMethod" value="ocr" onchange="toggleApiInput()"> استخراج الشفرة MRZ فقط (محلي - بدون إنترنت)</label>
+        <label><input type="radio" name="extractMethod" value="ocr" onchange="toggleApiInput()"> استخراج الشفرة MRZ فقط (محلي)</label>
         
         <div id="apiKeyContainer">
             <input type="password" id="geminiApiKey" placeholder="أدخل مفتاح Gemini API هنا...">
+            <small style="color: #28a745; display: block; margin-top: 5px;">* سيتم حفظ المفتاح تلقائياً في متصفحك لتسهيل الاستخدام مستقبلاً.</small>
         </div>
     </div>
 
@@ -49,53 +51,168 @@
 </div>
 
 <script>
+    // نظام اصطياد الأخطاء العام لضمان عدم تجمد الصفحة
+    window.onerror = function(message, source, lineno, colno, error) {
+        alert("تنبيه للنظام: حدث خطأ غير متوقع. يرجى تحديث الصفحة.\nالتفاصيل: " + message);
+        resetUI();
+        return true;
+    };
+
+    // استرجاع المفتاح المحفوظ تلقائياً عند فتح الصفحة
+    document.addEventListener("DOMContentLoaded", () => {
+        const savedKey = localStorage.getItem('savedGeminiKey');
+        if (savedKey) {
+            document.getElementById('geminiApiKey').value = savedKey;
+        }
+    });
+
     function toggleApiInput() {
         const method = document.querySelector('input[name="extractMethod"]:checked').value;
         document.getElementById('apiKeyContainer').style.display = method === 'ocr' ? 'none' : 'block';
     }
 
+    function resetUI() {
+        document.getElementById('extractBtn').disabled = false;
+        document.getElementById('extractBtn').innerText = "بدء معالجة الصور 🔍";
+        document.getElementById('loading').style.display = "none";
+    }
+
     async function processAllImages() {
-        const fileInput = document.getElementById('passportImages');
-        const resultsContainer = document.getElementById('resultsContainer');
-        const extractBtn = document.getElementById('extractBtn');
-        const loading = document.getElementById('loading');
-        const method = document.querySelector('input[name="extractMethod"]:checked').value;
-        const apiKey = document.getElementById('geminiApiKey').value.trim();
+        try {
+            const fileInput = document.getElementById('passportImages');
+            const resultsContainer = document.getElementById('resultsContainer');
+            const extractBtn = document.getElementById('extractBtn');
+            const loading = document.getElementById('loading');
+            const method = document.querySelector('input[name="extractMethod"]:checked').value;
+            const apiKey = document.getElementById('geminiApiKey').value.trim();
 
-        if (fileInput.files.length === 0) { alert("الرجاء اختيار صورة جواز واحد على الأقل."); return; }
-        if (method !== 'ocr' && !apiKey) { alert("الرجاء إدخال مفتاح API."); return; }
+            if (!fileInput.files || fileInput.files.length === 0) { 
+                alert("الرجاء اختيار صورة جواز واحد على الأقل."); 
+                return; 
+            }
+            if (method !== 'ocr' && !apiKey) { 
+                alert("الرجاء إدخال مفتاح API في المربع المخصص."); 
+                return; 
+            }
 
-        extractBtn.disabled = true;
-        loading.style.display = "block";
-        resultsContainer.innerHTML = "";
+            // حفظ المفتاح في المتصفح لراحة الموظف
+            if (apiKey) {
+                localStorage.setItem('savedGeminiKey', apiKey);
+            }
 
-        for (let i = 0; i < fileInput.files.length; i++) {
-            const file = fileInput.files[i];
-            const resultDiv = document.createElement('div');
-            resultDiv.className = 'passport-result';
-            resultDiv.innerHTML = `<div class="file-name">📄 ${file.name}</div><div class="result-text" id="res-${i}">جاري المعالجة...</div>`;
-            resultsContainer.appendChild(resultDiv);
+            // تغيير حالة الواجهة
+            extractBtn.disabled = true;
+            extractBtn.innerText = "جاري العمل... ⏳";
+            loading.style.display = "block";
+            resultsContainer.innerHTML = "";
 
-            try {
-                let output = "";
-                if (method === 'ocr') {
-                    output = await processWithOCR(file);
-                } else {
-                    output = await processWithAI(file, apiKey, method);
+            // معالجة الصور واحدة تلو الأخرى
+            for (let i = 0; i < fileInput.files.length; i++) {
+                const file = fileInput.files[i];
+                const resultDiv = document.createElement('div');
+                resultDiv.className = 'passport-result';
+                resultDiv.innerHTML = `<div class="file-name">📄 ${file.name}</div><div class="result-text" id="res-${i}">جاري تحليل الصورة...</div>`;
+                resultsContainer.appendChild(resultDiv);
+
+                try {
+                    let output = "";
+                    if (method === 'ocr') {
+                        output = await processWithOCR(file);
+                    } else {
+                        output = await processWithAI(file, apiKey, method);
+                    }
+                    
+                    const resBox = document.getElementById(`res-${i}`);
+                    resBox.innerText = output;
+                    resBox.classList.remove("error-text");
+                    
+                    // إنشاء زر النسخ
+                    const copyBtn = document.createElement('button');
+                    copyBtn.className = 'copy-btn';
+                    copyBtn.innerText = 'نسخ النص 📋';
+                    copyBtn.onclick = () => {
+                        navigator.clipboard.writeText(output).then(() => {
+                            copyBtn.innerText = 'تم النسخ! ✅';
+                            copyBtn.style.backgroundColor = '#28a745';
+                            setTimeout(() => {
+                                copyBtn.innerText = 'نسخ النص 📋';
+                                copyBtn.style.backgroundColor = '#1a73e8';
+                            }, 2000);
+                        }).catch(() => {
+                            alert("حدث خطأ أثناء النسخ.");
+                        });
+                    };
+                    resultDiv.appendChild(copyBtn);
+
+                } catch (err) {
+                    const errorBox = document.getElementById(`res-${i}`);
+                    errorBox.innerText = "❌ فشل: " + (err.message || "تأكد من جودة الصورة أو الاتصال بالإنترنت.");
+                    errorBox.classList.add("error-text");
                 }
-                document.getElementById(`res-${i}`).innerText = output;
-                document.getElementById(`res-${i}`).classList.remove("error-text");
-                
-                const copyBtn = document.createElement('button');
-                copyBtn.className = 'copy-btn';
-                copyBtn.innerText = 'نسخ النص 📋';
-                copyBtn.onclick = () => {
-                    navigator.clipboard.writeText(output);
-                    copyBtn.innerText = 'تم النسخ! ✅';
-                    setTimeout(() => copyBtn.innerText = 'نسخ النص 📋', 2000);
-                };
-                resultDiv.appendChild(copyBtn);
+            }
 
-            } catch (err) {
-                const errorBox = document.getElementById(`res-${i}`);
-                errorBox.innerText = "❌ فشل: " + err.message;
+        } catch (globalError) {
+            alert("حدث خطأ في النظام: " + globalError.message);
+        } finally {
+            resetUI();
+        }
+    }
+
+    async function processWithOCR(file) {
+        if (typeof Tesseract === 'undefined') {
+            throw new Error("لم يتم تحميل مكتبة OCR. تأكد من اتصال الإنترنت.");
+        }
+        const result = await Tesseract.recognize(file, 'eng');
+        const mrz = result.data.text.split('\n').filter(l => l.includes('<<')).map(l => l.replace(/\s/g, ''));
+        if (mrz.length >= 2) return mrz.join('\n');
+        throw new Error("لم يتم العثور على شفرة MRZ واضحة أسفل الجواز.");
+    }
+
+    async function processWithAI(file, apiKey, method) {
+        // تحويل الصورة لـ Base64
+        const base64Image = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = () => reject(new Error("فشل في قراءة ملف الصورة من جهازك."));
+            reader.readAsDataURL(file);
+        });
+
+        const videcomPrompt = `Extract passport details and output ONLY the Videcom format string. FORMAT: P/NATIONALTY 3 LETTERS/PASSPORTNUMBER/NATIONALTY 3 LETTERS/BIRTHDATE/GENDER/PASSPORT EXPRATION DATE/SURNAME/FIRSTNAME. DATE FORMAT: DDMMMYY. No explanations.`;
+        const amadeusPrompt = `Extract passport details and output ONLY the Amadeus format string. FORMAT: SR DOCS YY HK1-P-[COUNTRY 3 LETTERS]-[PASSPORT NUMBER]-[NATIONALITY 3 LETTERS]-[BIRTHDATE]-[GENDER]-[EXPIRY DATE]-[SURNAME]-[FIRSTNAME]. DATE FORMAT: DDMMMYY. Replace YY with airline code. No explanations.`;
+
+        const promptText = method === 'videcom' ? videcomPrompt : amadeusPrompt;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+
+        const payload = {
+            contents: [{ parts: [{ text: promptText }, { inline_data: { mime_type: file.type, data: base64Image } }] }],
+            safetySettings: [
+                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" }
+            ]
+        };
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error((errData.error && errData.error.message) ? errData.error.message : "فشل الاتصال بخوادم الذكاء الاصطناعي.");
+        }
+
+        const data = await response.json();
+        
+        if (!data.candidates || data.candidates.length === 0) {
+            throw new Error("قامت سيرفرات جوجل بحظر الصورة لدواعي أمنية أو لم تتعرف على البيانات.");
+        }
+
+        return data.candidates[0].content.parts[0].text.trim();
+    }
+</script>
+
+</body>
+</html>
